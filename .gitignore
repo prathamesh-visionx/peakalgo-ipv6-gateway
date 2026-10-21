@@ -1,0 +1,7 @@
+releases/
+*.env
+!*.env.example
+config.json
+*.pem
+*.key
+__pycache__/

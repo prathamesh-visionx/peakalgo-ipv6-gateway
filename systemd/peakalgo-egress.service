@@ -1,0 +1,26 @@
+[Unit]
+Description=PeakAlgo authenticated IPv6 order gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=peakalgo-egress
+Group=peakalgo-egress
+Environment=PEAKALGO_CONFIG=/etc/peakalgo-egress/config.json
+ExecStart=/opt/peakalgo-egress/node/bin/node /opt/peakalgo-egress/current/src/server.js
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+UMask=0077
+LimitNOFILE=8192
+MemoryMax=192M
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
