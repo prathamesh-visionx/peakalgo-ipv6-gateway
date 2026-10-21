@@ -57,6 +57,15 @@ class InstallerTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('interactive terminal', result.stderr)
 
+    def test_optional_ip_overrides_are_accepted(self):
+        with tempfile.TemporaryDirectory() as temp:
+            config = Path(temp) / 'answers.env'
+            config.write_text('PUBLIC_IPV4=143.244.141.199\nPRIMARY_IPV6=2400:6180:100:d0:0:1:a1fd:d001\n')
+            config.chmod(0o600)
+            answers = installer.read_env(config)
+            self.assertEqual(answers['PUBLIC_IPV4'], '143.244.141.199')
+            self.assertEqual(answers['PRIMARY_IPV6'], '2400:6180:100:d0:0:1:a1fd:d001')
+
     def extract(self, entries, bad_checksum=False):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)

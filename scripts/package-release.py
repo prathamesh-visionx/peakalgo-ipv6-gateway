@@ -7,7 +7,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 version = json.loads((ROOT / 'package.json').read_text())['version']
-files = [ROOT / 'package.json', ROOT / 'README.md', ROOT / 'config.env.example']
+files = [ROOT / 'package.json', ROOT / 'config.env.example']
 for folder in ['src', 'scripts', 'systemd']:
     files.extend(p for p in (ROOT / folder).rglob('*') if p.is_file() and p.suffix in {'.js', '.py', '.sh', '.service'})
 output = ROOT / 'releases' / f'peakalgo-egress-{version}.zip'

@@ -1,6 +1,6 @@
 {
   "name": "peakalgo-egress",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Authenticated IPv6 CONNECT gateway for PeakAlgo order egress",
   "engines": { "node": ">=22 <23" },

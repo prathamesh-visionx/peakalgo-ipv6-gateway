@@ -44,7 +44,7 @@ def read_env(path):
         if not line or line.startswith('#'):
             continue
         key, sep, value = line.partition('=')
-        if not sep or not re.fullmatch('[A-Z_]+', key):
+        if not sep or not re.fullmatch('[A-Z_][A-Z0-9_]*', key):
             raise SystemExit('Invalid environment file')
         result[key] = value.strip().strip('"').strip("'")
     return result
