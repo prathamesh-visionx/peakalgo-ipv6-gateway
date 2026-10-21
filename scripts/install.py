@@ -16,6 +16,7 @@ import sys
 import tarfile
 import time
 import urllib.request
+from urllib.parse import urlsplit, urlunsplit
 
 BASE = Path('/opt/peakalgo-egress')
 ETC = Path('/etc/peakalgo-egress')
@@ -150,16 +151,41 @@ def install_network(text, release_id):
         subprocess.run(['systemctl', 'stop', unit + '.timer'], check=False)
         raise
 
+def backend_origin(value):
+    if not isinstance(value, str) or any(c.isspace() or ord(c) < 32 for c in value) or '\\' in value:
+        raise ValueError('Backend URL must be an HTTPS origin')
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        raise ValueError('Backend URL must be an HTTPS origin') from None
+    if (parsed.scheme != 'https' or not parsed.hostname or parsed.username is not None or parsed.password is not None or
+            parsed.path not in ('', '/') or parsed.query or parsed.fragment or '?' in value or '#' in value or port == 0):
+        raise ValueError('Backend URL must be an HTTPS origin')
+    return urlunsplit(('https', parsed.netloc, '', '', ''))
+
+class NoRegistrationRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # Never forward the registration token or host secret to a redirected origin.
+        return None
+
 def register(config, base_url, token):
+    base_url = backend_origin(base_url)
+    if not isinstance(token, str) or len(token) < 32 or any(c in token for c in '\r\n'):
+        raise ValueError('Registration token must contain at least 32 characters and no newlines')
     payload = {key: config[key] for key in ['hostId', 'ipv4', 'port', 'secret', 'primaryIpv6', 'addresses']}
     payload['certificatePem'] = Path(config['certPath']).read_text()
     request = urllib.request.Request(base_url + '/api/egress/register', data=json.dumps(payload).encode(), method='POST',
         headers={'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token})
-    with urllib.request.urlopen(request, timeout=15) as response:
-        result = json.load(response)
-    if not result.get('success'):
+    opener = urllib.request.build_opener(NoRegistrationRedirect())
+    with opener.open(request, timeout=15) as response:
+        body = response.read(128_001)
+    if len(body) > 128_000:
+        raise ValueError('Registration response is too large')
+    result = json.loads(body)
+    if not isinstance(result, dict) or result.get('success') is not True or not isinstance(result.get('data'), dict) or result['data'].get('hostId') != config['hostId'] or result['data'].get('registered') is not True:
         raise SystemExit('Registration rejected; inspect backend configuration')
-    print('Host registered. It remains disabled until you run diagnostics and enable it in admin.')
+    print('Host registered. Existing activation and assignments are preserved; a new host starts disabled. No activation was requested.')
 
 def main():
     parser = argparse.ArgumentParser()
@@ -198,11 +224,7 @@ def main():
     if netplan_id not in ethernets:
         raise SystemExit('Select an existing netplan ID; refusing to invent primary network configuration')
     cidrs = validate_cidrs(ask('AWS backend public source IPv4 CIDRs, comma separated', env.get('BACKEND_ALLOWED_CIDRS', '')))
-    base_url = ask('Public AWS backend HTTPS origin', env.get('BACKEND_BASE_URL', '')).rstrip('/')
-    from urllib.parse import urlparse
-    parsed = urlparse(base_url)
-    if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment:
-        raise SystemExit('Backend URL must be an HTTPS origin')
+    base_url = backend_origin(ask('Public backend HTTPS origin', env.get('BACKEND_BASE_URL', '')))
     ssh_config = output(['sshd', '-T'])
     ssh_ports = sorted(set(int(x) for x in re.findall(r'^port (\d+)$', ssh_config, re.M))) or [22]
     if env.get('SSH_PORTS'):
