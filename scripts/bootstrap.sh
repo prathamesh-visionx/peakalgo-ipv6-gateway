@@ -4,28 +4,46 @@ set -euo pipefail
 RELEASE_ZIP_URL=""
 RELEASE_SHA256=""
 CONFIG_FILE=""
+ASSUME_YES=0
 while (($#)); do
   case "$1" in
     --zip-url) RELEASE_ZIP_URL="${2:?Missing URL}"; shift 2 ;;
     --sha256) RELEASE_SHA256="${2:?Missing SHA-256}"; shift 2 ;;
     --config) CONFIG_FILE="${2:?Missing configuration file}"; shift 2 ;;
-    --help) echo 'sudo bash bootstrap.sh --zip-url https://host/release.zip --sha256 HEX [--config /root/egress.env]'; exit 0 ;;
+    --yes) ASSUME_YES=1; shift ;;
+    --help) cat <<'HELP'
+sudo bash bootstrap.sh --zip-url HTTPS_URL --sha256 HEX [--config /root/egress.env] [--yes]
+
+Downloads a source ZIP over HTTPS, checks its SHA-256, and installs it.
+  --zip-url URL   Direct HTTPS URL returning the release ZIP
+  --sha256 HEX    Expected 64-character SHA-256 from the trusted publisher
+  --config FILE   Root-only installer answers and optional registration token
+  --yes           Approve configured non-network stages without repeated yes prompts
+                  Netplan changes always require interactive apply/KEEP confirmation.
+
+Existing gateway: use peakalgo-egress release install or backend set instead of reinstalling.
+HELP
+      exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
 done
-[[ -t 0 && -t 1 ]] || { echo 'Run from an interactive terminal, not curl | bash. Download this script first.' >&2; exit 1; }
+[[ $ASSUME_YES == 1 || ( -t 0 && -t 1 ) ]] || { echo 'Run from an interactive terminal, not curl | bash. Download this script first.' >&2; exit 1; }
 [[ $EUID -eq 0 ]] || { echo 'Run with sudo.' >&2; exit 1; }
 [[ "$RELEASE_ZIP_URL" == https://* && "$RELEASE_SHA256" =~ ^[a-fA-F0-9]{64}$ ]] || { echo 'Set an HTTPS ZIP URL and its expected SHA-256.' >&2; exit 1; }
 . /etc/os-release
 [[ "$ID" == ubuntu && "$VERSION_ID" == 24.04 ]] || { echo 'This installer targets Ubuntu 24.04 only.' >&2; exit 1; }
 echo 'This will download and verify your release, then open an interactive installer.'
-echo 'Installation, netplan/firewall changes, service activation and registration require separate review.'
-read -r -p 'Continue? [type yes]: ' answer
-[[ "$answer" == yes ]] || exit 0
+echo 'Review the installer plan; --yes approves non-network stages. Netplan apply/KEEP always needs a console.'
+if [[ $ASSUME_YES != 1 ]]; then
+  read -r -p 'Continue? [type yes]: ' answer
+  [[ "$answer" == yes ]] || exit 0
+fi
 if ! command -v curl >/dev/null || ! command -v python3 >/dev/null; then
   echo 'Prerequisites missing: install curl, python3 and ca-certificates using apt.'
-  read -r -p 'Approve prerequisite installation? [type yes]: ' answer
-  [[ "$answer" == yes ]] || exit 0
+  if [[ $ASSUME_YES != 1 ]]; then
+    read -r -p 'Approve prerequisite installation? [type yes]: ' answer
+    [[ "$answer" == yes ]] || exit 0
+  fi
   apt-get update
   apt-get install -y curl python3 ca-certificates
 fi
@@ -67,4 +85,5 @@ PY
 # END_SAFE_EXTRACT
 args=(--release-dir "$stage/content" --release-id "${RELEASE_SHA256:0:16}")
 if [[ -n "$CONFIG_FILE" ]]; then args+=(--config "$CONFIG_FILE"); fi
+if [[ $ASSUME_YES == 1 ]]; then args+=(--yes); fi
 python3 "$stage/content/scripts/install.py" "${args[@]}"

@@ -21,6 +21,8 @@ from urllib.parse import urlsplit, urlunsplit
 BASE = Path('/opt/peakalgo-egress')
 ETC = Path('/etc/peakalgo-egress')
 OVERLAY = Path('/etc/netplan/90-peakalgo-egress.yaml')
+ASSUME_YES = False
+STAGES_APPROVED = False
 
 def run(args, **kwargs):
     return subprocess.run(args, check=True, **kwargs)
@@ -28,8 +30,13 @@ def run(args, **kwargs):
 def output(args):
     return subprocess.check_output(args, text=True).strip()
 
-def confirm(message):
+def confirm(message, force=False):
     print('\n' + message)
+    if not force and (ASSUME_YES or STAGES_APPROVED):
+        print('Approved by the installation plan or --yes.')
+        return
+    if ASSUME_YES and not sys.stdin.isatty() and force:
+        raise SystemExit('Network changes require an interactive console and explicit connectivity confirmation; --yes cannot bypass this.')
     if input('Type yes to approve; anything else stops safely: ').strip() != 'yes':
         raise SystemExit('Stopped by operator. Completed stages are listed above; no later stages ran.')
 
@@ -37,7 +44,7 @@ def read_env(path):
     if not path:
         return {}
     p = Path(path)
-    if p.stat().st_mode & 0o077:
+    if p.is_symlink() or not p.is_file() or p.stat().st_uid != os.geteuid() or p.stat().st_mode & 0o077:
         raise SystemExit('Configuration file must be root-only: chmod 600 ' + str(p))
     result = {}
     for line in p.read_text().splitlines():
@@ -75,6 +82,10 @@ def netplan_text(netplan_id, addresses, prefixlen):
     return json.dumps({'network': {'version': 2, 'ethernets': {netplan_id: {'addresses': [f'{x}/{prefixlen}' for x in addresses]}}}}, indent=2) + '\n'
 
 def ask(label, default=''):
+    if ASSUME_YES:
+        if not default:
+            raise ValueError('Missing configured value: ' + label + '; provide it in --config or use interactive mode')
+        return default
     value = input(f'{label} [{default}]: ').strip()
     return value or default
 
@@ -120,7 +131,7 @@ def install_network(text, release_id):
         return
     print('\nProposed additional-address netplan overlay:\n' + text)
     print('Existing network files are preserved. A timed rollback restores this overlay if interrupted.')
-    confirm('Apply this netplan overlay? Keep a DigitalOcean console open and verify a second SSH session afterward.')
+    confirm('Apply this netplan overlay? Keep a DigitalOcean console open and verify a second SSH session afterward.', force=True)
     backups = ETC / 'backups'
     backups.mkdir(exist_ok=True)
     stamp = str(time.time_ns())
@@ -140,7 +151,7 @@ def install_network(text, release_id):
         OVERLAY.chmod(0o600)
         run(['netplan', 'generate'])
         run(['netplan', 'apply'])
-        confirm('Within 180 seconds: open another SSH session, review connectivity, then confirm KEEP this network configuration.')
+        confirm('Within 180 seconds: open another SSH session, review connectivity, then confirm KEEP this network configuration.', force=True)
         if marker.exists():
             raise SystemExit('Rollback already executed. Start installation again after reviewing networking.')
         run(['systemctl', 'stop', unit + '.timer'])
@@ -188,12 +199,15 @@ def register(config, base_url, token):
     print('Host registered. Existing activation and assignments are preserved; a new host starts disabled. No activation was requested.')
 
 def main():
-    parser = argparse.ArgumentParser()
+    global ASSUME_YES, STAGES_APPROVED
+    parser = argparse.ArgumentParser(description='Install the gateway with one prerequisite review and one configuration plan. Existing matching networking is preserved.')
     parser.add_argument('--release-dir', required=True)
     parser.add_argument('--release-id', required=True)
     parser.add_argument('--config')
+    parser.add_argument('--yes', action='store_true', help='Use configured answers and approve non-network stages; cannot bypass netplan apply/KEEP confirmation')
     args = parser.parse_args()
-    if not sys.stdin.isatty() or not sys.stdout.isatty() or os.geteuid() != 0:
+    ASSUME_YES = args.yes
+    if (not args.yes and (not sys.stdin.isatty() or not sys.stdout.isatty())) or os.geteuid() != 0:
         raise SystemExit('Run as root from an interactive terminal')
     if not re.fullmatch('[a-fA-F0-9]{16}', args.release_id):
         raise SystemExit('Invalid release ID')
@@ -240,6 +254,7 @@ def main():
     print('Gateway TCP port: 8443\nAllowed AWS clients: ' + ', '.join(cidrs) + '\nSSH ports preserved: ' + ', '.join(map(str, ssh_ports)))
     print('The droplet itself is also permitted for explicitly invoked local diagnostics. No connection suite or trades run automatically.')
     confirm('Approve this gateway configuration and persistent host identity?')
+    STAGES_APPROVED = True
     BASE.mkdir(exist_ok=True)
     BASE.chmod(0o755)
     ETC.mkdir(mode=0o750, exist_ok=True)
@@ -303,6 +318,9 @@ def main():
     run(['systemctl', 'daemon-reload'])
     run(['systemctl', 'enable', 'peakalgo-egress'])
     run(['systemctl', 'restart', 'peakalgo-egress'])
+    launcher = Path('/usr/local/bin/peakalgo-egress')
+    launcher.write_text('#!/bin/sh\nexec python3 /opt/peakalgo-egress/current/scripts/manage.py "$@"\n')
+    launcher.chmod(0o755)
     print('Service installation complete. No live connection or order tests were run.')
     confirm('Register this host with ' + base_url + '? This sends host credentials and inventory over HTTPS; it does not enable trading.')
     token = env.get('EGRESS_REGISTRATION_TOKEN') or getpass.getpass('Backend EGRESS_REGISTRATION_TOKEN (hidden): ')
